@@ -1,13 +1,10 @@
 #!/usr/bin/env python
 
-
 import argparse
 from cvfit import cvfit
 import cv2
-import functools
 import numpy as np
 import os
-from scipy.sparse import spdiags, csr_matrix, csc_matrix, linalg, eye
 import sys
 
 # construct the argument parser and parse the arguments
@@ -52,100 +49,46 @@ def cf_3D_H(source, target, rescale=1.0, use_curve = True, use_denoise = True):
     targetT    = starget.T
     ssshape    = sshape
     #Estimate 3D homography
-    P   = np.stack([sourceT, np.ones((1,sourceT.shape[1]))], axis=1) #Stack row-wise
-    Q   = np.stack([targetT, np.ones((1,targetT.shape[1]))], axis=1) #Stack row-wise
-    msk = (np.min(P,axis=1) > 1/255) & (np.min(Q,axis=1) > 1/255)
-    H   = uea_H_from_x_als(P[:,msk],Q[:,msk],10)
+    P   = np.vstack((sourceT, np.ones((1,sourceT.shape[1])))) #Stack row-wise
+    Q   = np.vstack((targetT, np.ones((1,targetT.shape[1])))) #Stack row-wise
+    msk = (np.min(P,axis=0) > 1/255) & (np.min(Q,axis=0) > 1/255)
+    (H,err,d)   = uea_H_from_x_als(P[:,msk],Q[:,msk],10)
     #Apply 3D homography
     Pe  = H @ P #Apply chromatic homography projection
     Pe  = Pe[0:3,:]/Pe[3,:]
     Pe  = np.maximum(Pe,0) #Element-wise max - zeros-out under-saturated pixels
-    Pe  = np.minimum(Pe,1) #Element-wise max - one-out over-saturated pixesl
+    Pe  = np.minimum(Pe,1) #Element-wise max - one-out over-saturated pixels
     #Brightness transfer
-    PeMean = mean(Pe[:,msk],axis=0).T # transformed brightness
-    TeMean = mean(targetT[:,msk],axis=0).T # target brightness
-    if opt.use_curve
+    PeMean = np.mean(Pe[:,msk],axis=0).T # transformed brightness
+    TeMean = np.mean(targetT[:,msk],axis=0).T # target brightness
+    if use_curve:
         # estimate brightness transfer
-        model.pp = cvfit(PeMean,TeMean,'quad'); # b-b mapping
-    else
-        # histogram matching
-        model.pp = cvfit(PeMean,TeMean,'hist'); # b-b mapping
-    end
-
-
-    D = SolveD1(Pe,target) #Now find the difference b/w the chromacity-adjusted source and the target, to get the shading difference -- These shading values apply only within local context of identical image backdrops
-    if not use_curve:
-        # apply shading
-        D_new   = np.minimum(D,10) # Element-wise min -- avoid shading artefact
-        pp      = None
+        pp = cvfit(PeMean,TeMean,'quad') # b-b mapping
     else:
-        Pem     = np.mean(Pe,axis=1)
-        pp      = csfit(Pem,np.squeeze(D),50) #Cubic-spline fit - returns an interpolator that is useful tin adjusting shading at more global level
-        Ped     = pp(Pem) #Calculate shade scaling factors using cubic-spline interpolator
-        if use_denoise:
-            D_new = SolveD2(Ped,sshape) #Adjust shading using Laplacian smoothness constraint to avoid generating shading artifacts
-        else:
-            D_new   = Ped
-    Peo = D_new.reshape((-1,1)) * Pe #Reshape is necessary for proper broadcast
-    Peo = np.reshape(Peo,sshape)
-    return (Peo,H,pp)
+        # histogram matching
+        pp = cvfit(PeMean,TeMean,'hist') # b-b mapping
+    #Re-apply to a higher res image
+    pe      = H @ np.vstack((source.T, np.ones(1,source.T.shape[1])))
+    Pe      = Pe[0:3,:]/Pe[3,:]
+    Pe      = np.maximum(Pe,0) #Element-wise max - zeros-out under-saturated pixels
+    Pe      = np.minimum(Pe,1) #Element-wise max - one-out over-saturated pixels
+    n       = Pe.shape[1] #Number of pixels (or columns)
+    PeMean  = np.mean(Pe,axis=0).T # transformed brightness
+    FMean   = pp(1+np.floor(PeMean*999))
+    FMean   = np.maximum(FMean,0) #Element-wise max - one-out over-saturated pixels
+    D       = FMean/PeMean # convert brightness change to shading - scaling factors
+    D[PeMean < (1/255)] = 1 # discard dark pixel shadings -- or scaling factor is equal to 1
+    Ei      = Pe.T.reshape(source.shape)
+    ImD     = D.reshape(source.shape[0:2]) #Reshape to source image size
 
+    if use_denoise: # denoise the shading field
+        grey    = cv2.cvtColor(source, cv2.COLOR_RGB2GRAY)
+        #https://people.csail.mit.edu/sparis/bf_course/slides/03_definition_bf.pdf
+        ImD     = cv.ximgproc.jointBilateralFilter(grey, ImD, d=-1, sigmaColor=0.1, sigmaSpatial=len(D)/16) #Heuristics for sigmaSpatial are 2% of length of image diagonal -- sigma color depends on mean/median of image gradients
+    Ei = np.minimum(np.maximum(Ei*ImD,0),1) #Now apply shading
+    return (Ei,H,pp)
 
-def SolveD1(p,q):
-    (nPx,nCh)       = p.shape
-    d_num           = (p*q) @ np.ones((nCh,1))
-    d_denom         = (p*p) @ np.ones((nCh,1))
-    #d               = np.squeeze(d_num / d_denom)
-    d               = d_num / d_denom
-    #d[np.isnan(d)]  = 0 #Set all nan's to 0, as they mess up subsequent calculations -- These came from 0/0 division warnings
-    #D               = spdiags(d.T,0,nPx,nPx)
-    return(d)
-
-def SolveD2(nd,sz):
-    nPx = nd.shape[0]
-    A1 = csr_matrix(eye(nPx))
-    # compute D
-    M1 = ShadingDiff(sz[0:2])
-    mlambda = 1/(M1.diagonal().mean())
-    mlambda = 0.1 * mlambda
-    D = linalg.lsqr(A1+(mlambda * M1),nd)[0]
-    return(D)
-
-def ShadingDiff(lsz):
-    # minimise an edge image
-    lsz     = np.array(lsz)
-    nel     = np.prod(lsz)
-    snel    = np.prod(lsz-2)
-
-    ind = np.array(list(range(0,nel)))
-    ind = ind.reshape(lsz, order='F')
-    cdx = ind[1:-1,1:-1] # centre
-    tdx = ind[0:-2,1:-1] # top
-    bdx = ind[2:,1:-1]   # bottom
-    ldx = ind[1:-1,0:-2] # left
-    rdx = ind[1:-1,2:]   # right
-
-    # flatten index
-    cdx = cdx.flatten(order='F')
-    tdx = tdx.flatten(order='F')
-    bdx = bdx.flatten(order='F')
-    ldx = ldx.flatten(order='F')
-    rdx = rdx.flatten(order='F')
-
-    #If the images are incredibly large, then an n x n diagonal shading matrix
-    #could be enormous (and consume more memory than necessary).  A sparse matrix
-    #is constructed to keep memory from being chewed up excessively for a simple
-    #shading mapping operation -- so we use a scipy.sparse() construct.
-    sM = csr_matrix((-4*np.ones(snel),(cdx,cdx)), shape=(nel,nel)) + \
-         csr_matrix((   np.ones(snel),(cdx,tdx)), shape=(nel,nel)) + \
-         csr_matrix((   np.ones(snel),(cdx,bdx)), shape=(nel,nel)) + \
-         csr_matrix((   np.ones(snel),(cdx,ldx)), shape=(nel,nel)) + \
-         csr_matrix((   np.ones(snel),(cdx,rdx)), shape=(nel,nel))
-    M2 = sM.T @ sM
-    return(M2)
-
-
-def uea_H_from_x_als(P, Q, max_iter, tol):
+def uea_H_from_x_als(P, Q, max_iter = 10, tol = 1e-20):
     # [H,rms,pa] = uea_H_from_x_als(H0,p1,p2,max_iter,tol)
     #
     # Compute H using alternating least square
@@ -159,53 +102,51 @@ def uea_H_from_x_als(P, Q, max_iter, tol):
     #  y1 y2 y3 ... yn 
     #  w1 w2 w3 ... wn]
 
-    if nargin<3, max_iter = 10 end
-    if nargin<4, tol = 1e-20 end
-
-    [Nch,Npx] = size(P)
+    (Nch,Npx) = P.shape[0:2]
 
     # definition for Graham
-    fP = max(P,1e-6) fQ = max(Q,1e-6)
+    fP = np.maximum(P,1e-6) 
+    fQ = np.maximum(Q,1e-6)
     N = fP
 
-    errs = Inf(max_iter+1,1) # error history
+    errs = [np.inf] * (max_iter+1) # error history
 
     # solve the homography using ALS
-    n_it = 1 d_err = Inf
-    while ( n_it-1<max_iter && d_err>tol)
-        n_it = n_it+1 # increase number of iteration
-
-        d = SolveD1(N,fQ)
-
-        P_d = fP.*repmat(d,[Nch,1])
-        cv=P_d*P_d' mma=mean(diag(cv))
-        M = fQ*P_d'/(cv++eye(Nch).*mma./5000)
-        N = M*fP
-
-        NDiff = (N.*repmat(d,[Nch,1])-Q).^2 # difference
-        errs(n_it) = mean(mean(NDiff)) # mean square error
-        d_err = errs(n_it-1) - errs(n_it) # 1 order error
-    end
+    n_it = 0 
+    d_err = np.inf
+    while ( (n_it < max_iter) and (d_err > tol) ):
+        n_it    = n_it + 1 # increase number of iteration
+        d       = SolveD1(N,fQ)
+        P_d     = fP * d
+        cv      = P_d @ P_d.T
+        mma     = np.mean(np.diagonal(cv))
+        cvv     = cv + (np.eye(Nch)*mma)/5000
+        M       = (fQ @ P_d.T) @ np.linalg.inv(cvv)
+        N       = M @ fP
+        #cv      = P_d @ P_d.T
+        #mma     = mean(diag(cv))
+        #M       = (fQ @ P_d.T)/(cv+eye(Nch).*mma./5000)
+        NDiff = (N*d-Q)**2 # squared difference
+        errs[n_it] = np.mean(NDiff) # mean square error
+        d_err = errs[n_it-1] - errs[n_it] # 1 order error
     H = M
-    err = errs(n_it)
+    err = errs[n_it]
+    return(H,err,d)
 
+def SolveD1(p,q):
+    nCh = p.shape[0]
+    d = (np.ones((1,nCh)) @ (p * q)) / (np.ones((1,nCh)) @ (p * p))
+    return(d)
 
 #The default format expected is in float format
 def im2double(im):
-    info = np.iinfo(im.dtype) # Get the data type of the input image
-    return im.astype(np.float) / info.max # Divide all values by the largest possible value in the datatype
+    return(skimage.img_as_float64(im))
 
 if __name__ == "__main__":
     parsed = parse_args()
     rescale = parsed.rescale
-    source = cv2.imread(parsed.source)
-    target = cv2.imread(parsed.target)
-    if( rescale != 1 ):
-        source = cv2.resize(source, None, fx=rescale,fy=rescale)
-        target = cv2.resize(target, None, fx=rescale,fy=rescale)
-    #Convert to normalized doubles as cf_3D_H expects this
-    source = im2double(source)
-    target = im2double(target)
+    source = im2double(cv2.imread(parsed.source))
+    target = im2double(cv2.imread(parsed.target))
     (cci, H, pp) = cf_3D_H(source, target)
     if( parsed.output ):
         cci = 255.0 * cci #Rescale back to 0-255
