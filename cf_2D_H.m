@@ -1,4 +1,4 @@
-function [ei,H] = cf_2D_H(oi,ri,opt)
+function [ei,model] = cf_2D_H(oi,ri,opt)
 %CF_2D-H estimates a 2-D color homography color transfer model.
 %
 %   CF_2D_H(OI,RI) returns the colour transfered source
@@ -39,6 +39,7 @@ C = [1,0,0;0,1,0;1,1,1];
 H = H_from_x_als(P,Q,20);
 
 H = C\(C*H);
+model.H = H;
 
 pe = H*sf1; % Apply homography
 pe = max(pe,0);
@@ -54,6 +55,7 @@ else
 
     %d = min(d,10);
     pp = csfit(meanpe,d,50);
+    model.pp = pp;
     nd = ppval(pp,meanpe);
     if opt.use_curve
         D_new = SolveD2(nd,ssz);
@@ -153,7 +155,7 @@ while ( n_it-1<max_iter && d_err>tol )
 
     P_d = P*D;
     cv = P_d*P_d'; mma = mean(diag(cv));
-    M = Q*P_d'/(cv++eye(Nch).*mma./1000000);
+    M = Q*P_d'/(cv+eye(Nch).*mma./1000000);
     N = M*P;
 
     NDiff = (N*D-Q).^2; % difference
