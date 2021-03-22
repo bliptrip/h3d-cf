@@ -30,14 +30,13 @@ def parse_args():
     parser.add_argument('-s', '--start', action='store', type=int, default=1, help="Starting image index.")
     parser.add_argument('-e', '--end', action='store', type=int, default=200, help="Ending image index.")
     parser.add_argument('-c', '--color_transfer_methods', action='append', default=['nguyen', 'pitie','pouli11','reinhard'], help="List of original color transfer methods applied to source images in 'in' folder.")
-    parser.add_argument('-a', '--color_approximation_methods', action='append', default=['2D_H'], help="List of new approximation methods applied to derive images in 'out' folder.")
+    parser.add_argument('-a', '--color_approximation_methods', action='append', default=['3D_H'], help="List of new approximation methods applied to derive images in 'out' folder.")
     parsed = parser.parse_args(sys.argv[1:])
     return(parsed)
 
 def im2double(im):
     info = np.iinfo(im.dtype) # Get the data type of the input image
     return im.astype('float64') / info.max # Divide all values by the largest possible value in the datatype
-
 
 if __name__ == "__main__":
     parsed = parse_args()
@@ -72,7 +71,7 @@ if __name__ == "__main__":
             for k,ap in enumerate(ap_names):
                 ap_import = "from cf_{} import cf_{}".format(ap,ap)
                 exec(ap_import)
-                ap_fun = "cf_{}(source,target,use_curve=False)".format(ap)
+                ap_fun = "cf_{}(source,target,use_curve=True)".format(ap)
                 (source_transformed, H, pp) = eval(ap_fun)
                 f_ap = '{}/{}_{}_{}.jpg'.format(out_path,i,cf,ap)
                 source_uint8 = (source_transformed*255.0).astype('uint8')
