@@ -40,21 +40,25 @@ def parse_args():
 #   Gong, H., Finlayson, G.D., Fisher, R.B.: Recoding color transfer as a
 #   color homography. In: British Machine Vision Conference. BMVA (2016)
 def cf_3D_H(source, target, rescale=1.0, use_curve = True, use_denoise = True):
+    osource     = source.reshape((-1,3)) #The original image in flattened n-pixel RGB format 
+    osourceT    = osource.T
     if rescale != 1.0:
         # downsampling
-        ssource = cv2.resize(source, (0,0), fx=rescale, fy=rescale).reshape((-1,3))
-        starget = cv2.resize(target, (0,0), fx=rescale, fy=rescale).reshape((-1,3))
+        ssource = cv2.resize(source, (0,0), fx=rescale, fy=rescale)
+        starget = cv2.resize(target, (0,0), fx=rescale, fy=rescale)
     else:
         # use full res-images
-        ssource    = source.reshape((-1,3)) #Reshape to n-pixels by 3 columns for RGB
-        starget    = target.reshape((-1,3)) #Reshape to n-pixes by 3 columns for RGB
+        ssource    = source.copy()
+        starget    = target.copy()
+    ssource    = ssource.reshape((-1,3)) # Reshape to flat n-pixel RGB image
+    starget    = starget.reshape((-1,3)) # Reshape to flat n-pixel RGB image
     sshape     = ssource.shape
-    sourceT    = ssource.T
-    targetT    = starget.T
+    ssourceT   = ssource.T
+    stargetT   = starget.T
     ssshape    = sshape
     #Estimate 3D homography
-    P   = np.vstack((sourceT, np.ones((1,sourceT.shape[1])))) #Stack row-wise
-    Q   = np.vstack((targetT, np.ones((1,targetT.shape[1])))) #Stack row-wise
+    P   = np.vstack((ssourceT, np.ones((1,ssourceT.shape[1])))) #Stack row-wise
+    Q   = np.vstack((stargetT, np.ones((1,stargetT.shape[1])))) #Stack row-wise
     msk = (np.min(P,axis=0) > 1/255) & (np.min(Q,axis=0) > 1/255)
     (H,err,d)   = uea_H_from_x_als(P[:,msk],Q[:,msk],10)
     #Apply 3D homography
@@ -64,7 +68,7 @@ def cf_3D_H(source, target, rescale=1.0, use_curve = True, use_denoise = True):
     Pe  = np.minimum(Pe,1) #Element-wise max - one-out over-saturated pixels
     #Brightness transfer
     PeMean = np.mean(Pe[:,msk],axis=0).T # transformed brightness
-    TeMean = np.mean(targetT[:,msk],axis=0).T # target brightness
+    TeMean = np.mean(stargetT[:,msk],axis=0).T # target brightness
     if use_curve:
         # estimate brightness transfer
         pp = cvfit(PeMean,TeMean,'quad') # b-b mapping
@@ -73,7 +77,7 @@ def cf_3D_H(source, target, rescale=1.0, use_curve = True, use_denoise = True):
         pp = cvfit(PeMean,TeMean,'hist') # b-b mapping
 
     #Re-apply to a higher res image
-    Pe      = H @ np.vstack((sourceT, np.ones((1,sourceT.shape[1]))))
+    Pe      = H @ np.vstack((osourceT, np.ones((1,osourceT.shape[1]))))
     Pe      = Pe[0:3,:]/Pe[3,:]
     Pe      = np.maximum(Pe,0) #Element-wise max - zeros-out under-saturated pixels
     Pe      = np.minimum(Pe,1) #Element-wise max - one-out over-saturated pixels
@@ -101,8 +105,8 @@ def cf_3D_H(source, target, rescale=1.0, use_curve = True, use_denoise = True):
 def cf_3D_convert(source, H, pp, use_denoise=True):
     #Re-apply to a higher res image
     ssource = source.reshape((-1,3)) #Reshape to n-pixels by 3 columns for RGB
-    sourceT = ssource.T
-    Pe      = H @ np.vstack((sourceT, np.ones((1,sourceT.shape[1]))))
+    ssourceT = ssource.T
+    Pe      = H @ np.vstack((ssourceT, np.ones((1,ssourceT.shape[1]))))
     Pe      = Pe[0:3,:]/Pe[3,:]
     Pe      = np.maximum(Pe,0) #Element-wise max - zeros-out under-saturated pixels
     Pe      = np.minimum(Pe,1) #Element-wise max - one-out over-saturated pixels
