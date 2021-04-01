@@ -22,7 +22,7 @@ def _match_cumulative_cdf(source, template):
 def cvfit(x,y,method='quad'):
     mask = (x > 0) & (y > 0)
     if method == 'quad':
-        f = increasingF2(x[mask],y[mask], p = 1e-5)
+        mapf = increasingF2(x[mask],y[mask], p = 1e-5)
     elif method == 'hist':
-        f = _match_cumulative_cdf(x,y)
-    return(f)
+        mapf = _match_cumulative_cdf(x,y)
+    return(mapf)

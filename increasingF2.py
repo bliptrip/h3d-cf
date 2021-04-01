@@ -1,11 +1,6 @@
 import numpy as np
 from qpsolvers import solve_qp
 
-def mapper(mapT):
-    def map_fun(x):
-        return(mapT[x]) #Convert from LUT to map function -- this is to be consistent with interpolate returned by histogram matching
-    return(map_fun)
-
 def increasingF2(x, y, p = 0, a = 1000):
     #INCREASINGF2 estimates a monotonically increasing curve.
     #
@@ -51,7 +46,7 @@ def increasingF2(x, y, p = 0, a = 1000):
     #Now we make the 2nd derivative (note the quantised values are
     #not evenly split across the domain of x. So we take this into account
     #
-    T = ((D_n_1 @ D_n) @ ticksd) @ (a**2)
+    T = ((D_n_1 @ D_n) @ ticksd) * (a**2)
 
     # mult are the per quantisation level scalar such that z=mult*x
     sm      = T.T @ T
@@ -60,7 +55,7 @@ def increasingF2(x, y, p = 0, a = 1000):
     G       = np.vstack(((-1 * D_n) @ ticksd, ticksd))
     h       = np.vstack((np.zeros((a,1)),np.ones((a+1,1)))).reshape((-1,))
     lb      = np.zeros((a+1,))
-    mult    = solve_qp(P, q, G, h, None, None, lb, None, solver="quadprog")
-    fin     = np.linspace(0,1,a+1).reshape((-1,1))
-    fout    = fin.T @ mult
-    return(mapper(fout))
+    mult    = solve_qp(P, q, G, h, None, None, lb, None, solver="cvxopt").reshape((-1,1))
+    fin     = np.linspace(0,1,a+1).reshape((1,-1))
+    fout    = fin.T * mult
+    return(fout)

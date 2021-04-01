@@ -3,8 +3,11 @@
 import argparse
 from cvfit import cvfit
 import cv2
+import cv2.ximgproc
 import numpy as np
 import os
+import skimage
+import skimage.color
 import sys
 
 # construct the argument parser and parse the arguments
@@ -12,7 +15,8 @@ def parse_args():
     parser = argparse.ArgumentParser(prog=sys.argv[0], description="A command-line utility to test functionality of 3-D color homography color transfer model algorithm based on" \
                                                                    "Gong, H., Finlayson, G.D., Fisher, R.B. and Fang, F., 2017. 3D color homography model for photo-realistic color transfer re-coding. The Visual Computer, pp.1-11.")
     parser.add_argument('-s', '--source', action='store', required=True, help="Source image filepath.")
-    parser.add_argument('-t', '--target', action='store', required=True,  help="Target image filepath.")
+    parser.add_argument('-t', '--target', action='store', help="Target image filepath.")
+    parser.add_argument('-c', '--convert', action='store_true', help="Flag to indicate that we are simply converting the source image using precalculated homography matrix + shading LUT.")
     parser.add_argument('-H', '--homography', action='store', required=True, help="Homography matrix (chromacity + shade-mapping interpolator function) filename, stored as compressed numpy archive.")
     parser.add_argument('-r', '--rescale', type=float, default=1.0, help="Factor to scale images by before calculating homography matrix H and shading map matrix D.")
     parser.add_argument('-o', '--output', action='store', help="Color-correct image filename if specified.")
@@ -67,26 +71,61 @@ def cf_3D_H(source, target, rescale=1.0, use_curve = True, use_denoise = True):
     else:
         # histogram matching
         pp = cvfit(PeMean,TeMean,'hist') # b-b mapping
+
     #Re-apply to a higher res image
-    pe      = H @ np.vstack((source.T, np.ones(1,source.T.shape[1])))
+    Pe      = H @ np.vstack((sourceT, np.ones((1,sourceT.shape[1]))))
     Pe      = Pe[0:3,:]/Pe[3,:]
     Pe      = np.maximum(Pe,0) #Element-wise max - zeros-out under-saturated pixels
     Pe      = np.minimum(Pe,1) #Element-wise max - one-out over-saturated pixels
     n       = Pe.shape[1] #Number of pixels (or columns)
     PeMean  = np.mean(Pe,axis=0).T # transformed brightness
-    FMean   = pp(1+np.floor(PeMean*999))
+    luIdx   = (1+np.floor(PeMean*999)).astype('uint') # Need to convert to integer to be used as index to lookup table
+    FMean   = pp[luIdx]
     FMean   = np.maximum(FMean,0) #Element-wise max - one-out over-saturated pixels
-    D       = FMean/PeMean # convert brightness change to shading - scaling factors
+    D       = FMean/(PeMean.reshape((-1,1))) # convert brightness change to shading - scaling factors
     D[PeMean < (1/255)] = 1 # discard dark pixel shadings -- or scaling factor is equal to 1
     Ei      = Pe.T.reshape(source.shape)
     ImD     = D.reshape(source.shape[0:2]) #Reshape to source image size
 
     if use_denoise: # denoise the shading field
-        grey    = cv2.cvtColor(source, cv2.COLOR_RGB2GRAY)
+        grey    = skimage.color.rgb2gray(source)
         #https://people.csail.mit.edu/sparis/bf_course/slides/03_definition_bf.pdf
-        ImD     = cv.ximgproc.jointBilateralFilter(grey, ImD, d=-1, sigmaColor=0.1, sigmaSpatial=len(D)/16) #Heuristics for sigmaSpatial are 2% of length of image diagonal -- sigma color depends on mean/median of image gradients
-    Ei = np.minimum(np.maximum(Ei*ImD,0),1) #Now apply shading
+        #Need to convert fields to 32-bit floats, otherwise stupid cv2 will error
+        ImD     = cv2.ximgproc.jointBilateralFilter(im2float(grey), im2float(ImD), d=-1, sigmaColor=0.1, sigmaSpace=len(D)/16) #Heuristics for sigmaSpatial are 2% of length of image diagonal -- sigma color depends on mean/median of image gradients
+        ImD     = im2double(ImD)
+    #Manually broadcast and reshape, otherwise it appears that the broadcasting doesn't happen the way I expect
+    ImD = np.repeat(ImD, 3).reshape((*ImD.shape,3))
+    Ei  = np.minimum(np.maximum(Ei*ImD,0),1) #Now apply shading
     return (Ei,H,pp)
+
+def cf_3D_convert(source, H, pp, use_denoise=True):
+    #Re-apply to a higher res image
+    ssource = source.reshape((-1,3)) #Reshape to n-pixels by 3 columns for RGB
+    sourceT = ssource.T
+    Pe      = H @ np.vstack((sourceT, np.ones((1,sourceT.shape[1]))))
+    Pe      = Pe[0:3,:]/Pe[3,:]
+    Pe      = np.maximum(Pe,0) #Element-wise max - zeros-out under-saturated pixels
+    Pe      = np.minimum(Pe,1) #Element-wise max - one-out over-saturated pixels
+    n       = Pe.shape[1] #Number of pixels (or columns)
+    PeMean  = np.mean(Pe,axis=0).T # transformed brightness
+    luIdx   = (1+np.floor(PeMean*999)).astype('uint') # Need to convert to integer to be used as index to lookup table
+    FMean   = pp[luIdx]
+    FMean   = np.maximum(FMean,0) #Element-wise max - one-out over-saturated pixels
+    D       = FMean/(PeMean.reshape((-1,1))) # convert brightness change to shading - scaling factors
+    D[PeMean < (1/255)] = 1 # discard dark pixel shadings -- or scaling factor is equal to 1
+    Ei      = Pe.T.reshape(source.shape)
+    ImD     = D.reshape(source.shape[0:2]) #Reshape to source image size
+
+    if use_denoise: # denoise the shading field
+        grey    = skimage.color.rgb2gray(source)
+        #https://people.csail.mit.edu/sparis/bf_course/slides/03_definition_bf.pdf
+        #Need to convert fields to 32-bit floats, otherwise stupid cv2 will error
+        ImD     = cv2.ximgproc.jointBilateralFilter(im2float(grey), im2float(ImD), d=-1, sigmaColor=0.1, sigmaSpace=len(D)/16) #Heuristics for sigmaSpatial are 2% of length of image diagonal -- sigma color depends on mean/median of image gradients
+        ImD     = im2double(ImD)
+    #Manually broadcast and reshape, otherwise it appears that the broadcasting doesn't happen the way I expect
+    ImD = np.repeat(ImD, 3).reshape((*ImD.shape,3))
+    Ei  = np.minimum(np.maximum(Ei*ImD,0),1) #Now apply shading
+    return Ei
 
 def uea_H_from_x_als(P, Q, max_iter = 10, tol = 1e-20):
     # [H,rms,pa] = uea_H_from_x_als(H0,p1,p2,max_iter,tol)
@@ -139,21 +178,26 @@ def SolveD1(p,q):
     return(d)
 
 #The default format expected is in float format
+def im2float(im):
+    return(skimage.img_as_float32(im))
+
 def im2double(im):
     return(skimage.img_as_float64(im))
+
+def im2u8(im):
+    return(skimage.img_as_ubyte(im))
 
 if __name__ == "__main__":
     parsed = parse_args()
     rescale = parsed.rescale
     source = im2double(cv2.imread(parsed.source))
-    target = im2double(cv2.imread(parsed.target))
-    (cci, H, pp) = cf_3D_H(source, target)
+    if( parsed.convert ):
+        model = np.load(parsed.homography)
+        cci = cf_3D_convert(source, H=model['H'], pp=model['shade_map'], use_denoise=True)
+    else:
+        target = im2double(cv2.imread(parsed.target))
+        (cci, H, pp) = cf_3D_H(source, target)
+        np.savez_compressed(parsed.homography, H=H, shade_map=pp)
     if( parsed.output ):
-        cci = 255.0 * cci #Rescale back to 0-255
-        cci = np.maximum(cci,0.0)
-        cci = np.minimum(cci,255.0)
-        cci = cci.astype('uint8')
+        cci = im2u8(cci)
         cv2.imwrite(parsed.output,cci)
-    np.savez_compressed(parsed.homography, H=H, interpolator=pp)
-
-
