@@ -19,6 +19,7 @@ import cv2
 import numpy as np
 import os
 import pandas as pd
+import skimage
 from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 import sys
 
@@ -34,9 +35,14 @@ def parse_args():
     parsed = parser.parse_args(sys.argv[1:])
     return(parsed)
 
+def im2float(im):
+    return(skimage.img_as_float32(im))
+
 def im2double(im):
-    info = np.iinfo(im.dtype) # Get the data type of the input image
-    return im.astype('float64') / info.max # Divide all values by the largest possible value in the datatype
+    return(skimage.img_as_float64(im))
+
+def im2u8(im):
+    return(skimage.img_as_ubyte(im))
 
 if __name__ == "__main__":
     parsed = parse_args()
@@ -71,7 +77,7 @@ if __name__ == "__main__":
             for k,ap in enumerate(ap_names):
                 ap_import = "from cf_{} import cf_{}".format(ap,ap)
                 exec(ap_import)
-                ap_fun = "cf_{}(source,target,use_curve=True)".format(ap)
+                ap_fun = "cf_{}(source,target,use_curve=True,use_denoise=False,rescale=0.125)".format(ap)
                 (source_transformed, H, pp) = eval(ap_fun)
                 f_ap = '{}/{}_{}_{}.jpg'.format(out_path,i,cf,ap)
                 source_uint8 = (source_transformed*255.0).astype('uint8')
