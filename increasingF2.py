@@ -55,7 +55,11 @@ def increasingF2(x, y, p = 0, a = 1000):
     G       = np.vstack(((-1 * D_n) @ ticksd, ticksd))
     h       = np.vstack((np.zeros((a,1)),np.ones((a+1,1)))).reshape((-1,))
     lb      = np.zeros((a+1,))
-    mult    = solve_qp(P, q, G, h, None, None, lb, None, solver="cvxopt").reshape((-1,1))
-    fin     = np.linspace(0,1,a+1).reshape((1,-1))
-    fout    = fin.T * mult
+    mult    = solve_qp(P, q, G, h, None, None, lb, None, solver="cvxopt")
+    if( mult != None ):
+        mult = mult.reshape((-1,1))
+        fin  = np.linspace(0,1,a+1).reshape((1,-1))
+        fout = fin.T * mult
+    else:
+        fout = None
     return(fout)
