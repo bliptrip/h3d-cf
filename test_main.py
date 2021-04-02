@@ -77,7 +77,7 @@ if __name__ == "__main__":
             for k,ap in enumerate(ap_names):
                 ap_import = "from cf_{} import cf_{}".format(ap,ap)
                 exec(ap_import)
-                ap_fun = "cf_{}(source,target,use_curve=True,use_denoise=False,rescale=0.125)".format(ap)
+                ap_fun = "cf_{}(source,target,use_curve=True,use_denoise=False)".format(ap)
                 (source_transformed, H, pp) = eval(ap_fun)
                 f_ap = '{}/{}_{}_{}.jpg'.format(out_path,i,cf,ap)
                 source_uint8 = (source_transformed*255.0).astype('uint8')
