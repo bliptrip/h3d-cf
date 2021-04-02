@@ -1,6 +1,5 @@
 from increasingF2 import increasingF2
 import numpy as np
-from scipy import interpolate
 
 #_match_cumulative_cdf() was taken from skimage.exposure code, but modified to return interpolator function/transform function
 #instead of the transformed source.
@@ -17,12 +16,16 @@ def _match_cumulative_cdf(source, template):
     tmpl_quantiles = np.cumsum(tmpl_counts) / template.size
 
     f = interpolate(src_quantiles, tmpl_quantiles)
-    return f
+    interp_a_values = np.interp(src_quantiles, tmpl_quantiles, tmpl_values)
+    return interp_a_values[src_unique_indices].reshape(source.shape)
 
 def cvfit(x,y,method='quad'):
     mask = (x > 0) & (y > 0)
     if method == 'quad':
         mapf = increasingF2(x[mask],y[mask], p = 1e-5)
-    elif method == 'hist':
-        mapf = _match_cumulative_cdf(x,y)
+        if( mapf == None ):
+            sys.stderr.write("WARN: cvfit(): Failed to find optimized mapping function using quadratic programming approach.  Trying histogram approach.")
+            method = 'hist'
+    if method == 'hist':
+        mapf = _match_cumulative_cdf(x[msk],y[msk])
     return(mapf)
